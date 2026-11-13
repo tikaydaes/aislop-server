@@ -1,0 +1,24 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Slop Reports</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="/">AI Slop Reports</a>
+  <nav>
+    <a href="/contest">Contest a listing</a>
+    {{if .User}}{{if .User.IsAdmin}}<a href="/admin">Admin</a>{{end}}<a href="/account">{{.User.Name}}</a>{{else}}<a href="/login">Sign in</a>{{end}}
+  </nav>
+</header>
+<main>
+{{end}}
+{{define "foot"}}
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
+{{end}}

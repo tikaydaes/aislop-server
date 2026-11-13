@@ -1,0 +1,70 @@
+{{template "head" .}}
+<h1>Admin</h1>
+<section class="card stats">
+  <div><b>{{.Stats.Users}}</b><span>accounts</span></div>
+  <div><b>{{.Stats.Videos}}</b><span>videos judged</span></div>
+  <div><b>{{.Stats.Confirmed}}</b><span>videos listed</span></div>
+  <div><b>{{.Stats.Flagged}}</b><span>channels listed</span></div>
+  <div><b>{{.Stats.Mapped}}</b><span>handles confirmed</span></div>
+</section>
+<form method="get" action="/admin" class="row card">
+  <input name="q" value="{{.Q}}" placeholder="video ID, channel ID or @handle">
+  <button>Search</button>
+</form>
+
+<section class="card">
+  <h2>Set a ruling</h2>
+  <form method="post" action="/admin/video" class="row">
+    <input name="id" placeholder="video ID" required>
+    <input name="uc" placeholder="channel ID (optional)">
+    <select name="action"><option value="confirm">Confirm slop</option><option value="reject">Reject</option><option value="auto">Back to consensus</option></select>
+    <button>Apply to video</button>
+  </form>
+  <form method="post" action="/admin/channel" class="row">
+    <input name="uc" placeholder="channel ID" required>
+    <select name="action"><option value="flag">List channel</option><option value="clear">Never list</option><option value="auto">Back to automatic</option></select>
+    <button>Apply to channel</button>
+  </form>
+</section>
+
+<section class="card" id="contests">
+  <h2>Open contests ({{len .Contests}})</h2>
+  {{range .Contests}}<article class="contest">
+    <p><b>{{.Target}}</b> <span class="muted">{{date .Created}}{{if .Contact}} · {{.Contact}}{{end}}</span></p>
+    <p>{{.Reason}}</p>
+    <form method="post" action="/admin/contest"><input type="hidden" name="id" value="{{.ID}}"><button class="secondary">Close</button></form>
+  </article>{{else}}<p class="muted">None.</p>{{end}}
+</section>
+
+<section class="card">
+  <h2>{{if .Q}}Videos matching{{else}}Unsettled, disputed or overridden videos{{end}}</h2>
+  <div class="scroll"><table>
+    <tr><th>Video</th><th>Channel</th><th>Status</th><th>Types</th><th>Level</th><th>For</th><th>Against</th><th>Ruling</th><th>Updated</th></tr>
+    {{range .Videos}}<tr><td><a href="https://www.youtube.com/watch?v={{.ID}}" rel="noreferrer" target="_blank">{{.ID}}</a></td><td>{{.UC}}</td><td>{{status .Status}}</td><td>{{types .Types}}</td><td>{{.Lvl}}</td><td>{{.NYes}} ({{printf "%.2f" .Yes}})</td><td>{{.NNo}} ({{printf "%.2f" .No}})</td><td>{{if gt .Ovr 0}}confirmed{{else if lt .Ovr 0}}rejected{{end}}</td><td>{{date .Updated}}</td></tr>{{end}}
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>{{if .Q}}Channels matching{{else}}Listed or overridden channels{{end}}</h2>
+  <div class="scroll"><table>
+    <tr><th>Channel</th><th>Handle</th><th>Name</th><th>Listed</th><th>Confirmed</th><th>Rejected</th><th>Ruling</th></tr>
+    {{range .Channels}}<tr><td>{{.UC}}</td><td>{{.Handle}}</td><td>{{.Name}}</td><td>{{if .Flagged}}yes{{end}}</td><td>{{.NC}}</td><td>{{.NR}}</td><td>{{if gt .Ovr 0}}listed{{else if lt .Ovr 0}}never{{end}}</td></tr>{{end}}
+  </table></div>
+</section>
+
+<section class="card" id="users">
+  <h2>Accounts</h2>
+  <div class="scroll"><table>
+    <tr><th>Name</th><th>Reputation</th><th>Weight</th><th>Judgements</th><th>Joined</th><th></th></tr>
+    {{range .Users}}<tr{{if .Banned}} class="muted"{{end}}>
+      <td>{{.Name}}{{if .IsAdmin}} (admin){{end}}{{if .Banned}} (barred){{end}}</td><td>{{rep .Reputation}}</td><td>{{weight .Reputation}}</td><td>{{.Reports}}</td><td>{{date .Created}}</td>
+      <td>{{if not .IsAdmin}}<form method="post" action="/admin/user" class="row">
+        <input type="hidden" name="id" value="{{.ID}}">
+        <input name="value" size="4" placeholder="rep">
+        <button name="action" value="reputation" class="secondary">Set</button>
+        {{if .Banned}}<button name="action" value="unban" class="secondary">Unbar</button>{{else}}<button name="action" value="ban" class="danger">Bar</button>{{end}}
+      </form>{{end}}</td>
+    </tr>{{end}}
+  </table></div>
+</section>
+{{template "foot" .}}

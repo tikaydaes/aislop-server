@@ -1,0 +1,41 @@
+{{template "head" .}}
+<h1>{{.User.Name}}</h1>
+<section class="card stats">
+  <div><b>{{rep .User.Reputation}}</b><span>reputation (0–100)</span></div>
+  <div><b>{{weight .User.Reputation}}</b><span>vote weight</span></div>
+  <div><b>{{.Reports}}</b><span>judgements made</span></div>
+  <div><b>{{.Limit}}</b><span>new reports per day</span></div>
+</section>
+{{if .User.Banned}}<p class="warn">This account has been barred from reporting.</p>{{end}}
+<section class="card">
+  <h2>Nickname</h2>
+  <form method="post" action="/account/name" class="row">
+    <input name="name" value="{{.User.Name}}" maxlength="32" required>
+    <button>Save</button>
+  </form>
+</section>
+<section class="card">
+  <h2>Passkeys</h2>
+  <p>{{.Passkeys}} registered. Losing every passkey means losing the account, so a second one on another device is worth having.</p>
+  <button type="button" id="add-passkey">Add another passkey</button>
+  <p id="msg" role="status"></p>
+</section>
+<section class="card">
+  <h2>Recent reputation changes</h2>
+  {{if .Events}}<table>
+    <tr><th>When (UTC)</th><th>Video</th><th>Change</th><th>Why</th></tr>
+    {{range .Events}}<tr{{if .Reversed}} class="muted"{{end}}><td>{{date .At}}</td><td>{{if .Video}}{{.Video}}{{end}}</td><td>{{rep .Delta}}</td><td>{{.Reason}}{{if .Reversed}} (superseded){{end}}</td></tr>{{end}}
+  </table>{{else}}<p class="muted">Nothing yet. Reputation moves when videos you judged are settled.</p>{{end}}
+</section>
+<section class="card">
+  <form method="post" action="/logout"><button class="secondary">Sign out</button></form>
+  <details>
+    <summary>Delete this account</summary>
+    <p>This removes the account and every judgement it made. It cannot be undone.</p>
+    <form method="post" action="/account/delete" class="row">
+      <input name="confirm" placeholder="type delete" autocomplete="off" required>
+      <button class="danger">Delete account</button>
+    </form>
+  </details>
+</section>
+{{template "foot" .}}

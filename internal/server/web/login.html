@@ -1,0 +1,16 @@
+{{template "head" .}}
+<h1>Sign in</h1>
+<div id="auth" data-next="{{.Next}}">
+  <section class="card">
+    <h2>I have an account</h2>
+    <button type="button" id="login">Sign in with a passkey</button>
+  </section>
+  <section class="card">
+    <h2>I'm new</h2>
+    <p>An account is a passkey and a nickname. No email, no password, and no recovery if the passkey is lost.</p>
+    <label>Nickname (optional)<input id="name" maxlength="32" autocomplete="off" placeholder="leave empty for a random one"></label>
+    <button type="button" id="register">Create account with a passkey</button>
+  </section>
+  <p id="msg" role="status"></p>
+</div>
+{{template "foot" .}}

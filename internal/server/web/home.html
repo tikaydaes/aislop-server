@@ -1,0 +1,19 @@
+{{template "head" .}}
+<h1>A community list of AI slop on YouTube</h1>
+<p>This service backs the <a href="https://github.com/tikaydaes/invidioslop">InvidioSlop</a> browser extension. People report individual videos as AI-generated filler, say what kind it is, and others confirm or contest the report.</p>
+<h2>How a video gets listed</h2>
+<ul>
+  <li>Each signed-in person gives one judgement per video: slop or not, which parts are AI (voice, visuals, script, music) and how much.</li>
+  <li>Judgements are weighted by reputation. Reputation is earned by agreeing with many <em>different</em> established people, and lost by being wrong.</li>
+  <li>A video is listed once the weighted lead is clear. A channel is listed once enough of its videos are, reported by enough different people.</li>
+</ul>
+<h2>Accounts</h2>
+<p>Anyone can download the list without an account. Reporting needs an account, which is a passkey and a nickname: no email address and no password. There is no account recovery, so add a second passkey if you can.</p>
+<h2>Privacy</h2>
+<ul>
+  <li>The list is downloaded in full, so the service never learns which videos you watch.</li>
+  <li>The extension may ask which <code>@handle</code> belongs to a channel ID and contribute answers it finds. This can be switched off in the extension.</li>
+  <li>Network addresses are only kept as salted hashes of the address range, to limit abuse. The salt is replaced every 30 days.</li>
+</ul>
+<p>Think a channel or video is listed wrongly? <a href="/contest">Contest it</a>, no account needed.</p>
+{{template "foot" .}}

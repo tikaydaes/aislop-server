@@ -1,0 +1,37 @@
+# The app is published on localhost only; the host's reverse proxy fronts it.
+# The database is reachable from the app's private network and nowhere else.
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://aislop:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/aislop
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN in .env}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      OAUTH_REDIRECT_URIS: ${OAUTH_REDIRECT_URIS:-}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    ports:
+      - "127.0.0.1:${HOST_PORT:-8470}:8080"
+    networks: [internal]
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aislop
+      POSTGRES_DB: aislop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aislop -d aislop"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+
+networks:
+  internal:

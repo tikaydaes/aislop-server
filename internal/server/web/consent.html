@@ -1,0 +1,11 @@
+{{template "head" .}}
+<h1>Connect the extension</h1>
+<section class="card">
+  <p>The <strong>InvidioSlop</strong> browser extension wants to report, confirm and contest videos as <strong>{{.User.Name}}</strong>.</p>
+  <form method="post" action="/oauth/authorize">
+    {{range $k, $v := .Query}}{{range $v}}<input type="hidden" name="{{$k}}" value="{{.}}">{{end}}{{end}}
+    <button name="decision" value="allow">Allow</button>
+    <button name="decision" value="deny" class="secondary">Cancel</button>
+  </form>
+</section>
+{{template "foot" .}}

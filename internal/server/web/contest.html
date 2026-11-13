@@ -1,0 +1,11 @@
+{{template "head" .}}
+<h1>Contest a listing</h1>
+<p>If a channel or video is listed here wrongly, tell us why. A person reviews every request; submitting one does not change the listing by itself.</p>
+<form id="contest" class="card">
+  <label>Channel or video (link, @handle or ID)<input name="target" maxlength="300" required></label>
+  <label>Why is the listing wrong?<textarea name="reason" rows="6" minlength="20" maxlength="4000" required></textarea></label>
+  <label>How to reach you (optional)<input name="contact" maxlength="200"></label>
+  <button>Send</button>
+  <p id="msg" role="status"></p>
+</form>
+{{template "foot" .}}
