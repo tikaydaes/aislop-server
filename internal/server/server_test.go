@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -62,13 +63,25 @@ func mkUser(t *testing.T, s *Server, rep float64) *User {
 	userN++
 	u := &User{Name: fmt.Sprintf("user%d", userN), Reputation: rep}
 	err := s.db.QueryRow(context.Background(),
-		`INSERT INTO users (wa_handle, name, reputation) VALUES ($1, $2, $3) RETURNING id::text`,
+		`INSERT INTO users (wa_handle, name, reputation, created_at) VALUES ($1, $2, $3, now() - interval '90 days') RETURNING id::text`,
 		[]byte(fmt.Sprintf("handle-%d-%d", userN, time.Now().UnixNano())), u.Name, rep).Scan(&u.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return u
 }
+
+// mkNewUser is an account that signed up just now.
+func mkNewUser(t *testing.T, s *Server, rep float64) *User {
+	t.Helper()
+	u := mkUser(t, s, rep)
+	if _, err := s.db.Exec(context.Background(), `UPDATE users SET created_at = now() WHERE id = $1`, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+func near(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
 
 func rep(t *testing.T, s *Server, u *User) float64 {
 	t.Helper()
@@ -152,7 +165,7 @@ func TestDecide(t *testing.T) {
 
 func TestConsensusAndReputation(t *testing.T) {
 	s := newTestServer(t)
-	a, b := mkUser(t, s, 50), mkUser(t, s, 50)
+	a, b, c := mkUser(t, s, 80), mkUser(t, s, 80), mkUser(t, s, 80)
 	wrong := mkUser(t, s, 5)
 
 	if vs := assess(t, s, a, vid(1), chn(1), true); vs.Status != "pending" {
@@ -163,25 +176,246 @@ func TestConsensusAndReputation(t *testing.T) {
 	if vs.Status != "confirmed" || vs.Level != 2 || strings.Join(vs.Types, ",") != "voice,visual" {
 		t.Fatalf("after second report: %+v", vs)
 	}
-	if got := rep(t, s, a); got <= 50 {
+	if got := rep(t, s, a); got <= 80 {
 		t.Errorf("first reporter did not gain: %v", got)
 	}
-	if ga, gb := rep(t, s, a)-50, rep(t, s, b)-50; ga <= gb {
-		t.Errorf("first reporter should gain more than the confirmer: %v vs %v", ga, gb)
+	if ga, gb := rep(t, s, a)-80, rep(t, s, b)-80; ga <= gb || gb <= 0 {
+		t.Errorf("first reporter should gain more than the confirmer, who still gains: %v vs %v", ga, gb)
 	}
 	if got := rep(t, s, wrong); got != 5-lossWrong {
 		t.Errorf("wrong voter reputation = %v", got)
 	}
 
-	// The outcome flips when the reporters change their minds: earlier
-	// awards are reversed, not stacked.
-	assess(t, s, a, vid(1), chn(1), false)
-	vs = assess(t, s, b, vid(1), chn(1), false)
+	// The outcome flips: b changes sides and c agrees with the dissenter.
+	// Earlier awards are reversed, not stacked, and the first reporter
+	// pays the first-reporter price for being wrong.
+	assess(t, s, b, vid(1), chn(1), false)
+	vs = assess(t, s, c, vid(1), chn(1), false)
 	if vs.Status != "rejected" {
 		t.Fatalf("after flip: %s", vs.Status)
 	}
 	if got := rep(t, s, wrong); got <= 5 {
 		t.Errorf("the dissenter was right in the end but has %v", got)
+	}
+	if got := rep(t, s, a); !near(got, 80-lossWrong*firstReportMul) {
+		t.Errorf("first reporter after losing = %v", got)
+	}
+}
+
+func TestScore(t *testing.T) {
+	t0 := time.Now()
+	n := 0
+	v := func(slop bool, rep float64) vote {
+		n++
+		return vote{user: fmt.Sprintf("u%03d", n), slop: slop, rep: rep, created: t0.Add(time.Duration(n) * time.Second)}
+	}
+	in := func(status int) scoreInput {
+		return scoreInput{status: status, pairs: map[[2]string]int{}, chanPrior: map[string]int{}}
+	}
+
+	// Three established voters: the first is paid for building the
+	// consensus and for being followed, the second mostly for building,
+	// the third arrived after it was decided and with nobody behind them.
+	votes := []vote{v(true, 100), v(true, 100), v(true, 100)}
+	got := score(votes, in(statusConfirmed))
+	if !near(got[votes[0].user], (builderShare+followShare*6/9)*firstReportMul) ||
+		!near(got[votes[1].user], builderShare+followShare*3/9) || got[votes[2].user] != 0 {
+		t.Errorf("three voters: %v", got)
+	}
+
+	// Joining a landslide pays next to nothing, even with a follower.
+	votes = nil
+	for i := 0; i < 10; i++ {
+		votes = append(votes, v(true, 100))
+	}
+	late := v(true, 100)
+	votes = append(votes, late, v(true, 100))
+	if g := score(votes, in(statusConfirmed))[late.user]; g <= 0 || g > 0.01 {
+		t.Errorf("late joiner earned %v", g)
+	}
+
+	// Throwaway accounts agreeing afterwards are worth almost nothing.
+	lead := v(true, 50)
+	votes = []vote{lead, v(true, 0), v(true, 0), v(true, 0), v(true, 0), v(true, 0)}
+	if g := score(votes, in(statusConfirmed))[lead.user]; g > 0.08 {
+		t.Errorf("sock puppets paid %v", g)
+	}
+
+	// Accounts on one network earn nothing from each other.
+	x, y := v(true, 100), v(true, 100)
+	x.net, y.net = "net-a", "net-a"
+	if got := score([]vote{x, y}, in(statusConfirmed)); len(got) != 0 {
+		t.Errorf("same network paid: %v", got)
+	}
+
+	// "Not slop" on a video nobody reported pays nothing; answering a
+	// real report does, and the wrong first reporter pays extra.
+	votes = []vote{v(false, 100), v(false, 100), v(false, 100)}
+	if got := score(votes, in(statusRejected)); len(got) != 0 {
+		t.Errorf("uncontested not-slop paid: %v", got)
+	}
+	reporter := v(true, 100)
+	votes = []vote{reporter, v(false, 100), v(false, 100), v(false, 100)}
+	got = score(votes, in(statusRejected))
+	if got[votes[1].user] <= 0 || !near(got[reporter.user], -lossWrong*firstReportMul) {
+		t.Errorf("contested not-slop: %v", got)
+	}
+
+	// An overturned listing costs its reporters double.
+	votes = []vote{v(true, 100), v(true, 100)}
+	sc := in(statusRejected)
+	sc.byAdmin, sc.overturned = true, true
+	got = score(votes, sc)
+	if !near(got[votes[0].user], -lossWrong*overturnMul*firstReportMul) || !near(got[votes[1].user], -lossWrong*overturnMul) {
+		t.Errorf("overturned: %v", got)
+	}
+
+	// Each further video from one channel pays less; none once it is listed.
+	votes = []vote{v(true, 100), v(true, 100)}
+	base := score(votes, in(statusConfirmed))[votes[1].user]
+	sc = in(statusConfirmed)
+	sc.chanPrior[votes[1].user] = 1
+	if g := score(votes, sc)[votes[1].user]; !near(g, base/2) {
+		t.Errorf("second video of a channel paid %v, first paid %v", g, base)
+	}
+	votes[1].chanListed = true
+	if g := score(votes, in(statusConfirmed))[votes[1].user]; g != 0 {
+		t.Errorf("video of a listed channel paid %v", g)
+	}
+}
+
+// Several accounts behind one network count once towards a decision.
+func TestOneNetworkOneVote(t *testing.T) {
+	a, b := vote{user: "a", slop: true, rep: 100, types: 1, level: 2, net: "n1"}, vote{user: "b", slop: true, rep: 100, types: 1, level: 2, net: "n1"}
+	if o := decide([]vote{a, b}, 0); o.status != statusPending || o.nYes != 1 {
+		t.Errorf("one network settled a video: %+v", o)
+	}
+	b.net = "n2"
+	if o := decide([]vote{a, b}, 0); o.status != statusConfirmed {
+		t.Errorf("two networks did not settle: %+v", o)
+	}
+}
+
+// Reputation keeps following later agreement, and a late vote on a decided
+// video earns nothing.
+func TestFollowersPayEarlierVoters(t *testing.T) {
+	s := newTestServer(t)
+	a, b, c := mkUser(t, s, 60), mkUser(t, s, 60), mkUser(t, s, 60)
+	assess(t, s, a, vid(1), "", true)
+	assess(t, s, b, vid(1), "", true)
+	ra, rb := rep(t, s, a), rep(t, s, b)
+	if vs := assess(t, s, c, vid(1), "", true); vs.Status != "confirmed" {
+		t.Fatalf("status %s", vs.Status)
+	}
+	if rep(t, s, a) <= ra || rep(t, s, b) <= rb {
+		t.Errorf("earlier voters did not gain from a follower: %v→%v, %v→%v", ra, rep(t, s, a), rb, rep(t, s, b))
+	}
+	if got := rep(t, s, c); got != 60 {
+		t.Errorf("late voter on a decided video has %v", got)
+	}
+	// Counts on undecided videos are hidden from people who have not voted.
+	assess(t, s, a, vid(2), "", true)
+	if vs, _ := s.VideoState(context.Background(), vid(2), b); !vs.CountsHidden || vs.NYes != 0 {
+		t.Errorf("pending counts visible to a non-voter: %+v", vs)
+	}
+	if vs, _ := s.VideoState(context.Background(), vid(2), a); vs.CountsHidden || vs.NYes != 1 {
+		t.Errorf("pending counts hidden from the voter: %+v", vs)
+	}
+}
+
+func TestDailyGainCap(t *testing.T) {
+	s := newTestServer(t)
+	ctx := context.Background()
+	u := mkUser(t, s, 10)
+	apply := func(video string, target float64) {
+		tx, err := s.db.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.applyScores(ctx, tx, video, map[string]float64{u.ID: target}); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply("v1", 2)
+	apply("v2", 2)
+	if got := rep(t, s, u); !near(got, 10+dailyGainCap) {
+		t.Fatalf("after two gains of 2: %v", got)
+	}
+	// Losses are never capped.
+	apply("v3", -1.5)
+	if got := rep(t, s, u); !near(got, 10+dailyGainCap-1.5) {
+		t.Fatalf("after a loss: %v", got)
+	}
+	// The held-back part arrives when the video is rescored another day.
+	real := s.now
+	s.now = func() time.Time { return real().Add(25 * time.Hour) }
+	defer func() { s.now = real }()
+	apply("v2", 2)
+	if got := rep(t, s, u); !near(got, 10+4-1.5) {
+		t.Fatalf("next day: %v", got)
+	}
+	// A video that stops paying takes back only what it paid.
+	apply("v1", 0)
+	tx, _ := s.db.Begin(ctx)
+	if err := s.applyScores(ctx, tx, "v2", map[string]float64{}); err != nil {
+		t.Fatal(err)
+	}
+	_ = tx.Commit(ctx)
+	if got := rep(t, s, u); !near(got, 10-1.5) {
+		t.Fatalf("after reversal: %v", got)
+	}
+}
+
+// A burst of reports from new accounts puts the channel on hold: even
+// established users cannot get it listed until an administrator releases it.
+func TestBrigadeHold(t *testing.T) {
+	s := newTestServer(t)
+	ctx := context.Background()
+	held := func(uc string) bool {
+		var h bool
+		if err := s.db.QueryRow(ctx, `SELECT COALESCE((SELECT held FROM channels WHERE uc = $1), false)`, uc).Scan(&h); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	for i := 0; i < brigadeReporters; i++ {
+		if i == brigadeReporters-1 && held(chn(9)) {
+			t.Fatal("held too early")
+		}
+		assess(t, s, mkNewUser(t, s, 0), vid(i%2), chn(9), true)
+	}
+	if !held(chn(9)) {
+		t.Fatal("no hold after a burst from new accounts")
+	}
+	a, b := mkUser(t, s, 90), mkUser(t, s, 90)
+	assess(t, s, a, vid(0), chn(9), true)
+	if vs := assess(t, s, b, vid(0), chn(9), true); vs.Status != "pending" {
+		t.Fatalf("listed while on hold: %s", vs.Status)
+	}
+	if rep(t, s, a) != 90 {
+		t.Error("reputation paid while on hold")
+	}
+	if err := s.releaseHold(ctx, "channel", chn(9)); err != nil {
+		t.Fatal(err)
+	}
+	if vs, _ := s.VideoState(ctx, vid(0), a); vs.Status != "confirmed" || held(chn(9)) {
+		t.Fatalf("after release: %+v", vs)
+	}
+	// More new accounts do not start another hold straight away.
+	assess(t, s, mkNewUser(t, s, 0), vid(1), chn(9), true)
+	if held(chn(9)) {
+		t.Fatal("held again right after release")
+	}
+
+	// The same burst from long-standing accounts is not a brigade.
+	for i := 0; i < brigadeReporters+2; i++ {
+		assess(t, s, mkUser(t, s, 20), vid(50+i), chn(10), true)
+	}
+	if held(chn(10)) {
+		t.Fatal("established accounts triggered a hold")
 	}
 }
 

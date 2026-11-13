@@ -142,3 +142,38 @@ CREATE TABLE IF NOT EXISTS contests (
   status      text NOT NULL DEFAULT 'open',
   created_at  timestamptz NOT NULL DEFAULT now()
 );
+
+-- Later additions. Every statement stays idempotent.
+
+-- Network each judgement came from (several accounts behind one network
+-- count once) and whether the channel was already listed at that moment.
+ALTER TABLE assessments ADD COLUMN IF NOT EXISTS net_key text NOT NULL DEFAULT '';
+ALTER TABLE assessments ADD COLUMN IF NOT EXISTS chan_listed boolean NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS assessments_uc ON assessments (uc, created_at) WHERE uc <> '';
+
+-- delta is what a video is worth to the user; applied is what has reached
+-- their reputation so far (the daily cap can hold it back).
+ALTER TABLE rep_events ADD COLUMN IF NOT EXISTS applied double precision NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX IF NOT EXISTS rep_events_live ON rep_events (user_id, video_id)
+  WHERE NOT reversed AND video_id IS NOT NULL;
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS gain_day date;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS gain_used double precision NOT NULL DEFAULT 0;
+
+-- Holds: suspected brigading waits for an administrator.
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS held boolean NOT NULL DEFAULT false;
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS hold_reason text NOT NULL DEFAULT '';
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS held_at timestamptz;
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS hold_released_at timestamptz;
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS held boolean NOT NULL DEFAULT false;
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS hold_reason text NOT NULL DEFAULT '';
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS held_at timestamptz;
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS hold_released_at timestamptz;
+
+-- Which pairs each video has rewarded, so pair_counts can be undone.
+CREATE TABLE IF NOT EXISTS video_pairs (
+  video_id text NOT NULL,
+  a uuid NOT NULL,
+  b uuid NOT NULL,
+  PRIMARY KEY (video_id, a, b)
+);

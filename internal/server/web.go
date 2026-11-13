@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"embed"
 	"html/template"
@@ -98,6 +99,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/channel", h(s.handleAdminChannel))
 	mux.HandleFunc("POST /admin/user", h(s.handleAdminUser))
 	mux.HandleFunc("POST /admin/contest", h(s.handleAdminContest))
+	mux.HandleFunc("POST /admin/hold", h(s.handleAdminHold))
 
 	static, _ := fs.Sub(staticFS, "web/static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
@@ -159,7 +161,7 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	rows, err := s.db.Query(ctx,
-		`SELECT video_id, delta, reason, reversed, created_at FROM rep_events WHERE user_id = $1 ORDER BY id DESC LIMIT 25`, u.ID)
+		`SELECT video_id, applied, reason, reversed, created_at FROM rep_events WHERE user_id = $1 AND (reversed OR applied <> 0) ORDER BY id DESC LIMIT 25`, u.ID)
 	if err != nil {
 		return err
 	}
@@ -327,6 +329,11 @@ type adminUserRow struct {
 	Created    time.Time
 }
 
+type adminHold struct {
+	Kind, ID, Reason string
+	At               *time.Time
+}
+
 type adminContest struct {
 	ID                      int64
 	Target, Reason, Contact string
@@ -413,6 +420,23 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
+	rows, err = s.db.Query(ctx,
+		`SELECT 'channel', uc, hold_reason, held_at FROM channels WHERE held
+		 UNION ALL
+		 SELECT 'video', id, hold_reason, held_at FROM videos WHERE held
+		 ORDER BY 4 DESC NULLS LAST LIMIT 100`)
+	if err != nil {
+		return err
+	}
+	holds, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (adminHold, error) {
+		var h adminHold
+		err := row.Scan(&h.Kind, &h.ID, &h.Reason, &h.At)
+		return h, err
+	})
+	if err != nil {
+		return err
+	}
+
 	var stats struct{ Users, Videos, Confirmed, Flagged, Mapped int }
 	if err := s.db.QueryRow(ctx,
 		`SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM videos),
@@ -423,7 +447,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return s.page(w, r, http.StatusOK, "admin", map[string]any{
-		"User": u, "Q": q, "Videos": videos, "Channels": channels, "Users": users, "Contests": contests, "Stats": stats,
+		"User": u, "Q": q, "Videos": videos, "Channels": channels, "Users": users, "Contests": contests, "Holds": holds, "Stats": stats,
 	})
 }
 
@@ -545,4 +569,53 @@ func (s *Server) handleAdminContest(w http.ResponseWriter, r *http.Request) erro
 	}
 	http.Redirect(w, r, "/admin#contests", http.StatusSeeOther)
 	return nil
+}
+
+// handleAdminHold releases a brigading hold: consensus applies again, and
+// no new hold starts on the same target for a while.
+func (s *Server) handleAdminHold(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	if _, err := s.adminUser(r, true); err != nil {
+		return err
+	}
+	kind, id := r.FormValue("kind"), strings.TrimSpace(r.FormValue("id"))
+	if err := s.releaseHold(ctx, kind, id); err != nil {
+		return err
+	}
+	http.Redirect(w, r, "/admin?q="+url.QueryEscape(id), http.StatusSeeOther)
+	return nil
+}
+
+func (s *Server) releaseHold(ctx context.Context, kind, id string) error {
+	now := s.now()
+	return pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		switch {
+		case kind == "video" && reVideo.MatchString(id):
+			if _, err := tx.Exec(ctx,
+				`UPDATE videos SET held = false, hold_released_at = $2 WHERE id = $1`, id, now); err != nil {
+				return err
+			}
+			return s.recomputeVideo(ctx, tx, id)
+		case kind == "channel" && reUC.MatchString(id):
+			if _, err := tx.Exec(ctx,
+				`UPDATE channels SET held = false, hold_released_at = $2 WHERE uc = $1`, id, now); err != nil {
+				return err
+			}
+			rows, err := tx.Query(ctx, `SELECT id FROM videos WHERE uc = $1 AND status = 0 ORDER BY id`, id)
+			if err != nil {
+				return err
+			}
+			videos, err := pgx.CollectRows(rows, pgx.RowTo[string])
+			if err != nil {
+				return err
+			}
+			for _, v := range videos {
+				if err := s.recomputeVideo(ctx, tx, v); err != nil {
+					return err
+				}
+			}
+			return s.recomputeChannel(ctx, tx, id)
+		}
+		return errf(http.StatusBadRequest, "bad_request", "invalid hold")
+	})
 }

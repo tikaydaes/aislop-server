@@ -27,6 +27,16 @@
   </form>
 </section>
 
+<section class="card" id="holds">
+  <h2>Held for review ({{len .Holds}})</h2>
+  <p class="muted">A burst of reports that came mostly from new accounts. Nothing new is listed for these until you release the hold or set a ruling above.</p>
+  {{range .Holds}}<article class="contest">
+    <p><b>{{.Kind}}</b> <a href="/admin?q={{.ID}}">{{.ID}}</a> <span class="muted">{{if .At}}{{date .At}}{{end}}</span></p>
+    <p>{{.Reason}}</p>
+    <form method="post" action="/admin/hold"><input type="hidden" name="kind" value="{{.Kind}}"><input type="hidden" name="id" value="{{.ID}}"><button class="secondary">Release hold</button></form>
+  </article>{{else}}<p class="muted">None.</p>{{end}}
+</section>
+
 <section class="card" id="contests">
   <h2>Open contests ({{len .Contests}})</h2>
   {{range .Contests}}<article class="contest">
